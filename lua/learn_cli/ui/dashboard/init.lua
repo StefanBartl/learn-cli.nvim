@@ -1,182 +1,231 @@
 ---@module 'learn_cli.ui.dashboard'
----@brief Main dashboard UI for learn-cli.nvim
----@description
---- Displays overview of available exercises, cycles, progress statistics,
---- and recent activity. Entry point for starting new exercises.
+---@brief Main dashboard UI for learn_cli.nvim
 
 local M = {}
 
-local notify = require("learn_cli.utils.notify")
+-- Forward declarations
+local validate_handles
+local generate_content
+local create_buffer
+local create_window
 
-M.buf = nil
-M.win = nil
+-- State
+---@type integer?
+local buf = nil
+---@type integer?
+local win = nil
+---@type boolean
+local is_open = false
 
---- Zeigt M.Dashboard an
-function M.show()
-  -- Erstelle Buffer
-  M.buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = M.buf })
-  vim.api.nvim_set_option_value("filetype", "learn-cli-dashboard", { buf = M.buf })
+--- Validate and clean up invalid handles
+---@return nil
+validate_handles = function()
+  if buf and not vim.api.nvim_buf_is_valid(buf) then
+    buf = nil
+  end
 
-  -- Erstelle Fenster (zentriert)
-  local width = math.floor(vim.o.columns * 0.8)
-  local height = math.floor(vim.o.lines * 0.8)
+  if win and not vim.api.nvim_win_is_valid(win) then
+    win = nil
+  end
 
-  M.win = vim.api.nvim_open_win(M.buf, true, {
-    relative = "editor",
+  if win and buf then
+    local ok, win_buf = pcall(vim.api.nvim_win_get_buf, win)
+    if not ok or win_buf ~= buf then
+      win = nil
+    end
+  end
+end
+
+--- Generate dashboard content
+---@return string[]
+generate_content = function()
+  local state = require('learn_cli.state')
+  local info = state.get_cycle_info()
+  local progress = state.get_progress()
+  local exercise = state.get_current_exercise()
+
+  local lines = {
+    '╔══════════════════════════════════════════════════════════╗',
+    '║                    LEARN CLI DASHBOARD                   ║',
+    '╚══════════════════════════════════════════════════════════╝',
+    '',
+    '┌─ Cycle Information ─────────────────────────────────────┐',
+    string.format('│ Name: %-49s │', info.name),
+    string.format('│ Description: %-43s │', info.description),
+    string.format('│ Difficulty: %-44s │', info.difficulty),
+    '└─────────────────────────────────────────────────────────┘',
+    '',
+    '┌─ Progress ──────────────────────────────────────────────┐',
+  }
+
+  -- Progress bar
+  local day_pct = progress.total_days > 0
+    and (progress.current_day / progress.total_days)
+    or 0
+  local bar_width = 40
+  local filled = math.floor(day_pct * bar_width)
+  local bar = string.rep('━', filled) .. string.rep('─', bar_width - filled)
+
+  table.insert(lines, string.format('│ Day: %d/%d %s │',
+    progress.current_day,
+    progress.total_days,
+    bar
+  ))
+  table.insert(lines, string.format('│ Iteration: %d/%d %-41s │',
+    progress.current_iteration,
+    progress.total_iterations,
+    ''
+  ))
+  table.insert(lines, string.format('│ Exercise: %d/%d %-42s │',
+    progress.current_exercise,
+    progress.total_exercises,
+    ''
+  ))
+  table.insert(lines, '└─────────────────────────────────────────────────────────┘')
+  table.insert(lines, '')
+
+  -- Current exercise
+  if exercise then
+    table.insert(lines, '┌─ Current Exercise ──────────────────────────────────────┐')
+    table.insert(lines, string.format('│ Title: %-49s │', exercise.title or 'Untitled'))
+    table.insert(lines, string.format('│ Command: %-47s │', exercise.command or 'N/A'))
+    table.insert(lines, string.format('│ Difficulty: %-44s │', exercise.difficulty or 'N/A'))
+    table.insert(lines, '│                                                         │')
+    table.insert(lines, '│ Description:                                            │')
+
+    local desc = exercise.description or 'No description'
+    for i = 1, #desc, 50 do
+      local chunk = desc:sub(i, i + 49)
+      table.insert(lines, string.format('│   %-52s │', chunk))
+    end
+
+    table.insert(lines, '└─────────────────────────────────────────────────────────┘')
+  else
+    table.insert(lines, '┌─ Current Exercise ──────────────────────────────────────┐')
+    table.insert(lines, '│ No exercise loaded                                      │')
+    table.insert(lines, '│                                                         │')
+    table.insert(lines, '│ Create a cycle: :LearnCLICreateCycle cycle_01           │')
+    table.insert(lines, '└─────────────────────────────────────────────────────────┘')
+  end
+
+  table.insert(lines, '')
+  table.insert(lines, '┌─ Keybindings ───────────────────────────────────────────┐')
+  table.insert(lines, '│ q         - Close dashboard                             │')
+  table.insert(lines, '│ n         - Next exercise                               │')
+  table.insert(lines, '│ p         - Previous exercise                           │')
+  table.insert(lines, '│ <leader>ld - Toggle dashboard                            │')
+  table.insert(lines, '│ :LearnCLIInfo    - Show cycle info                      │')
+  table.insert(lines, '│ :LearnCLIReset   - Reset progress                       │')
+  table.insert(lines, '└─────────────────────────────────────────────────────────┘')
+
+  return lines
+end
+
+--- Create dashboard buffer
+---@return integer
+create_buffer = function()
+  local b = vim.api.nvim_create_buf(false, true)
+
+  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = b })
+  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = b })
+  vim.api.nvim_set_option_value('swapfile', false, { buf = b })
+  vim.api.nvim_set_option_value('filetype', 'learn_cli_dashboard', { buf = b })
+  vim.api.nvim_set_option_value('modifiable', false, { buf = b })
+
+  -- Buffer-local keymaps
+  local opts = { noremap = true, silent = true, buffer = b }
+  vim.keymap.set('n', 'q', function() M.close() end, opts)
+  vim.keymap.set('n', 'n', function()
+    vim.cmd('LearnCLINext')
+  end, opts)
+  vim.keymap.set('n', 'p', function()
+    vim.cmd('LearnCLIPrev')
+  end, opts)
+
+  return b
+end
+
+--- Create dashboard window
+---@param b integer Buffer handle
+---@return integer
+create_window = function(b)
+  local width = 60
+  local height = 30
+
+  local w = vim.api.nvim_open_win(b, true, {
+    relative = 'editor',
     width = width,
     height = height,
     col = math.floor((vim.o.columns - width) / 2),
     row = math.floor((vim.o.lines - height) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = " Learn CLI ",
-    title_pos = "center",
+    style = 'minimal',
+    border = 'rounded',
   })
 
-  -- Rendere Inhalt
-  M.render()
+  vim.api.nvim_set_option_value('cursorline', true, { win = w })
+  vim.api.nvim_set_option_value('wrap', false, { win = w })
 
-  -- Keymaps
-  M.setup_keymaps()
+  return w
 end
 
---- Rendert M.Dashboard-Inhalt
-function M.render()
-  local lines = {}
+--- Refresh dashboard content
+---@return nil
+function M.refresh()
+  validate_handles()
 
-  -- Header
-  table.insert(lines, "")
-  table.insert(lines, "  🚀 Learn CLI - Interactive Command Line Training")
-  table.insert(lines, "")
-  table.insert(lines, "  ────────────────────────────────────────────────")
-  table.insert(lines, "")
-
-  -- Statistics
-  local stats = require("learn_cli.state.progress").get_statistics()
-  local level, xp = require("learn_cli.state.progress").get_level()
-
-  table.insert(lines, string.format("  📊 Statistics"))
-  table.insert(lines, string.format("     Level: %d | XP: %d", level, xp))
-  table.insert(lines, string.format("     Exercises: %d | Perfect: %d",
-    stats.exercises_completed, stats.perfect_scores))
-  table.insert(lines, string.format("     Streak: %d days | Total Time: %d min",
-    stats.streak, math.floor(stats.total_time / 60)))
-  table.insert(lines, "")
-  table.insert(lines, "  ────────────────────────────────────────────────")
-  table.insert(lines, "")
-
-  -- Cycles
-  table.insert(lines, "  📚 Available Cycles")
-  table.insert(lines, "")
-
-  local cycle_manager = require("learn_cli.core.cycle_manager")
-  local cycle_ids = cycle_manager.list_cycle_ids()
-
-  if #cycle_ids == 0 then
-    table.insert(lines, "  ⚠️  No cycles found!")
-    table.insert(lines, "")
-    table.insert(lines, "  Create cycles in: ~/.config/nvim/exercises/cycles/")
-  else
-    for i, cycle_id in ipairs(cycle_ids) do
-      local info = cycle_manager.get_cycle_info(cycle_id)
-      if info then
-        local progress = require("learn_cli.state.progress").get_cycle_progress(cycle_id)
-
-        local status_icon = progress.completed and "✅" or "📝"
-        local progress_str = string.format("%d/%d days",
-          progress.current_day - 1, info.days)
-
-        table.insert(lines, string.format("  [%d] %s %s", i, status_icon, info.title))
-        table.insert(lines, string.format("      Category: %s | Progress: %s",
-          info.category, progress_str))
-        table.insert(lines, "")
-      end
-    end
-  end
-
-  table.insert(lines, "")
-  table.insert(lines, "  ────────────────────────────────────────────────")
-  table.insert(lines, "")
-  table.insert(lines, "  Press <Enter> to start | <q> to quit")
-  table.insert(lines, "")
-
-  -- In Buffer schreiben
-  vim.api.nvim_set_option_value("modifiable", true, { buf = M.buf })
-  vim.api.nvim_buf_set_lines(M.buf, 0, -1, false, lines)
-  vim.api.nvim_set_option_value("modifiable", false, { buf = M.buf })
-
-  -- Speichere Cycle-IDs für Keymaps
-  M.cycle_ids = cycle_ids
-end
-
---- Setup Keymaps
-function M.setup_keymaps()
-  local opts = {buffer = M.buf, noremap = true, silent = true}
-
-  -- Quit
-  vim.keymap.set("n", "q", function()
-    M.close()
-  end, opts)
-
-  vim.keymap.set("n", "<Esc>", function()
-    M.close()
-  end, opts)
-
-  -- Start Cycle
-  vim.keymap.set("n", "<CR>", function()
-    M.select_cycle_under_cursor()
-  end, opts)
-
-  -- Number keys (1-9)
-  for i = 1, 9 do
-    vim.keymap.set("n", tostring(i), function()
-      M.start_cycle(i)
-    end, opts)
-  end
-
-  -- Refresh
-  vim.keymap.set("n", "r", function()
-    M.render()
-  end, opts)
-end
-
---- Wählt Cycle unter Cursor
-function M.select_cycle_under_cursor()
-  local line = vim.api.nvim_get_current_line()
-  local num = tonumber(line:match("^%s*%[(%d+)%]"))
-
-  if num then
-    M.start_cycle(num)
-  else
-    notify.warn("Kein Cycle unter Cursor")
-  end
-end
-
---- Startet einen Cycle
----@param index integer
-function M.start_cycle(index)
-  if not M.cycle_ids or #M.cycle_ids < index then
-    notify.error("Cycle nicht gefunden")
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
 
-  local cycle_id = M.cycle_ids[index]
+  local lines = generate_content()
 
-  -- M.Dashboard schließen
-  M.close()
-
-  -- Cycle starten
-  require("learn_cli").start_cycle(cycle_id)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = buf })
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = buf })
 end
 
---- Schließt M.Dashboard
-function M.close()
-  if M.win and vim.api.nvim_win_is_valid(M.win) then
-    vim.api.nvim_win_close(M.win, true)
+--- Open dashboard
+---@return nil
+function M.open()
+  validate_handles()
+
+  if is_open and win and vim.api.nvim_win_is_valid(win) then
+    return
   end
-  M.win = nil
-  M.buf = nil
+
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    buf = create_buffer()
+  end
+
+  win = create_window(buf)
+  is_open = true
+
+  M.refresh()
+end
+
+--- Close dashboard
+---@return nil
+function M.close()
+  validate_handles()
+
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+
+  win = nil
+  is_open = false
+end
+
+--- Toggle dashboard
+---@return nil
+function M.toggle()
+  validate_handles()
+
+  if is_open then
+    M.close()
+  else
+    M.open()
+  end
 end
 
 return M

@@ -1,313 +1,244 @@
 ---@module 'learn_cli.core.exercise_runner'
----@brief Führt Exercises aus und verwaltet deren Lifecycle
----
---- Verantwortlich für:
---- - Setup des Working Directory
---- - Ausführung von Exercises
---- - Hint-System
---- - Lösung anzeigen
---- - Submission und Validation
+---@brief Exercise execution and validation logic
 
 local M = {}
 
-local validator = require("learn_cli.core.validator")
-local scorer = require("learn_cli.core.scorer")
-local notify = require("learn_cli.utils.notify")
+-- Dependencies
+local state = require('learn_cli.state')
 
----@class LearnCLI.ExerciseState
----@field exercise table Exercise data aus YAML
----@field cycle_id string
----@field iteration integer
----@field day integer
----@field exercise_number integer
----@field start_time integer Timestamp
----@field attempts integer Anzahl Versuche
----@field hints_used integer[] Verwendete Hint-Level
----@field solution_viewed boolean Ob Lösung angeschaut wurde
----@field working_dir string Arbeitsverzeichnis
----@field status "running"|"paused"|"completed"|"failed"
----@field original_dir string Original CWD
+---@type integer?
+M.buf = nil
 
---- Startet ein Exercise
----@param exercise table Exercise definition
----@param cycle_id string
----@param iteration integer
----@param day integer
----@param exercise_number integer
----@return LearnCLI.ExerciseState|nil, string|nil error
-function M.start(exercise, cycle_id, iteration, day, exercise_number)
-  -- Working Directory erstellen
-  local working_dir = string.format(
-    "/tmp/learn-cli/%s/iter%d/day%02d/ex%02d",
-    cycle_id,
-    iteration,
-    day,
-    exercise_number
-  )
-
-  -- Altes Verzeichnis löschen falls vorhanden
-  if vim.fn.isdirectory(working_dir) == 1 then
-    vim.fn.delete(working_dir, "rf")
+--- Normalize hint to table structure
+---@param hint_data string|LearnCLI.HintData
+---@param level? integer
+---@return LearnCLI.HintData
+local function normalize_hint(hint_data, level)
+  -- Type guard
+  if type(hint_data) == 'string' then
+    return {
+      text = hint_data,
+      level = level or 1,
+      cost = 10,
+    }
   end
 
-  -- Neues Verzeichnis erstellen
-  local ok = pcall(vim.fn.mkdir, working_dir, "p")
-  if not ok then
-    return nil, "Konnte Working Directory nicht erstellen"
+  if type(hint_data) == 'table' then
+    return {
+      text = hint_data.text or '',
+      level = hint_data.level or level or 1,
+      cost = hint_data.cost or 10,
+    }
   end
 
-  -- Original CWD speichern
-  local original_dir = vim.fn.getcwd()
-
-  -- In Working Directory wechseln
-  vim.cmd("cd " .. working_dir)
-
-  -- Setup ausführen (Dateien erstellen, etc.)
-  if exercise.setup then
-    local setup_ok, setup_err = M.run_setup(exercise.setup, working_dir)
-    if not setup_ok then
-      vim.cmd("cd " .. original_dir)
-      return nil, "Setup fehlgeschlagen: " .. (setup_err or "unknown")
-    end
-  end
-
-  local state = {
-    exercise = exercise,
-    cycle_id = cycle_id,
-    iteration = iteration,
-    day = day,
-    exercise_number = exercise_number,
-    start_time = os.time(),
-    attempts = 0,
-    hints_used = {},
-    solution_viewed = false,
-    working_dir = working_dir,
-    status = "running",
-    original_dir = original_dir,
+  -- Fallback
+  return {
+    text = 'No hint available',
+    level = 1,
+    cost = 0,
   }
-
-  -- UI anzeigen
-  require("learn_cli.ui.exercise_view").show(state)
-
-  return state
 end
 
---- Führt Setup aus
----@param setup table Setup configuration
----@param working_dir string
----@return boolean success, string|nil error
-function M.run_setup(setup, working_dir)
-  -- Dateien erstellen
-  if setup.files then
-    for _, file_def in ipairs(setup.files) do
-      local filepath = working_dir .. "/" .. file_def.name
-
-      -- Unterverzeichnisse erstellen falls nötig
-      local dir = vim.fn.fnamemodify(filepath, ":h")
-      if vim.fn.isdirectory(dir) == 0 then
-        vim.fn.mkdir(dir, "p")
-      end
-
-      -- Datei schreiben
-      local file = io.open(filepath, "w")
-      if not file then
-        return false, "Konnte Datei nicht erstellen: " .. file_def.name
-      end
-
-      file:write(file_def.content)
-      file:close()
-    end
+--- Show hint with proper structure
+---@param exercise_state table
+---@param hint_data string|LearnCLI.HintData
+---@return nil
+function M.show_hint(exercise_state, hint_data)
+  if type(exercise_state) ~= 'table' then
+    vim.notify(
+      'Invalid exercise state',
+      vim.log.levels.ERROR,
+      { title = 'Learn CLI' }
+    )
+    return
   end
 
-  -- Verzeichnisstruktur erstellen
-  if setup.structure then
-    for _, item in ipairs(setup.structure) do
-      local path = working_dir .. "/" .. item
+  -- Normalize hint to table structure
+  local hint = normalize_hint(hint_data, exercise_state.hint_level or 1)
 
-      -- Ist es ein Verzeichnis? (endet mit /)
-      if item:sub(-1) == "/" then
-        vim.fn.mkdir(path, "p")
-      else
-        -- Ist eine Datei - Elternverzeichnis erstellen
-        local dir = vim.fn.fnamemodify(path, ":h")
-        if vim.fn.isdirectory(dir) == 0 then
-          vim.fn.mkdir(dir, "p")
-        end
-
-        -- Leere Datei erstellen
-        local file = io.open(path, "w")
-        if file then
-          file:close()
-        end
-      end
-    end
+  -- Validate buffer
+  if not M.buf or not vim.api.nvim_buf_is_valid(M.buf) then
+    vim.notify(
+      'Exercise view not initialized',
+      vim.log.levels.WARN,
+      { title = 'Learn CLI' }
+    )
+    return
   end
+
+  -- Build hint display lines
+  local lines = {
+    '',
+    '  ' .. string.rep('─', 50),
+    string.format('  💡 Hint Level %d (Cost: %d points)',
+      hint.level, hint.cost),
+    '  ' .. string.rep('─', 50),
+    '',
+  }
+
+  -- Split hint text by newlines
+  for line in hint.text:gmatch('[^\n]+') do
+    table.insert(lines, '  ' .. line)
+  end
+  table.insert(lines, '')
+
+  -- Write to buffer
+  local ok = pcall(function()
+    vim.api.nvim_set_option_value('modifiable', true, { buf = M.buf })
+    vim.api.nvim_buf_set_lines(M.buf, -1, -1, false, lines)
+    vim.api.nvim_set_option_value('modifiable', false, { buf = M.buf })
+  end)
+
+  if not ok then
+    vim.notify(
+      'Failed to display hint',
+      vim.log.levels.ERROR,
+      { title = 'Learn CLI' }
+    )
+  end
+end
+
+--- Request hint for current exercise
+---@param exercise_state table
+---@return boolean success
+function M.request_hint(exercise_state)
+  if type(exercise_state) ~= 'table' then
+    return false
+  end
+
+  local current_exercise = state.get_current_exercise()
+  if not current_exercise then
+    vim.notify(
+      'No exercise loaded',
+      vim.log.levels.WARN,
+      { title = 'Learn CLI' }
+    )
+    return false
+  end
+
+  -- Get hints from exercise
+  local hints = current_exercise.hints
+  if not hints or type(hints) ~= 'table' or #hints == 0 then
+    vim.notify(
+      'No hints available for this exercise',
+      vim.log.levels.INFO,
+      { title = 'Learn CLI' }
+    )
+    return false
+  end
+
+  -- Determine next hint level
+  local hint_level = exercise_state.hint_level or 0
+  hint_level = hint_level + 1
+
+  if hint_level > #hints then
+    vim.notify(
+      'All hints already shown',
+      vim.log.levels.INFO,
+      { title = 'Learn CLI' }
+    )
+    return false
+  end
+
+  -- Get hint (might be string or table)
+  local hint_data = hints[hint_level]
+
+  -- Show hint with normalized structure
+  M.show_hint(exercise_state, hint_data)
+
+  -- Update state
+  exercise_state.hint_level = hint_level
 
   return true
 end
 
---- Benutzer reicht Lösung ein
----@param state LearnCLI.ExerciseState
----@return table result
-function M.submit(state)
-  state.attempts = state.attempts + 1
-
-  notify.info(string.format("Versuche Lösung zu validieren... (Versuch %d)", state.attempts))
-
-  -- Validierung durchführen
-  local validation_result = validator.validate(
-    state.exercise.validation,
-    state.working_dir
-  )
-
-  if not validation_result.success then
-    -- Fehlgeschlagen
-    notify.error("Lösung ist nicht korrekt!")
-
-    require("learn_cli.ui.exercise_view").show_errors(state, validation_result.errors)
-
-    return {
-      success = false,
-      errors = validation_result.errors,
-      attempts = state.attempts,
-    }
+--- Validate exercise solution
+---@param exercise_state table
+---@param user_input string
+---@return boolean is_correct
+---@return string? message
+function M.validate_solution(exercise_state, user_input)
+  if type(exercise_state) ~= 'table' then
+    return false, 'Invalid exercise state'
+  end
+  if type(user_input) ~= 'string' or user_input == '' then
+    return false, 'No input provided'
   end
 
-  -- Erfolgreich!
-  local duration = os.time() - state.start_time
-  local score = scorer.calculate_score(state, duration)
+  local current_exercise = state.get_current_exercise()
+  if not current_exercise then
+    return false, 'No exercise loaded'
+  end
 
-  state.status = "completed"
+  local solution = current_exercise.solution
+  if type(solution) ~= 'string' then
+    return false, 'No solution defined'
+  end
 
-  notify.success(string.format(
-    "Korrekt! Punkte: %d/%d (%.0f%%)",
-    score.total,
-    score.max,
-    score.percentage
-  ))
+  -- Trim whitespace for comparison
+  local user_trimmed = vim.trim(user_input)
+  local solution_trimmed = vim.trim(solution)
 
-  -- UI updaten
-  require("learn_cli.ui.exercise_view").show_success(state, score)
+  if user_trimmed == solution_trimmed then
+    return true, 'Correct! Well done!'
+  end
 
-  -- Fortschritt speichern
-  require("learn_cli.state.progress").save_exercise_result({
-    cycle_id = state.cycle_id,
-    iteration = state.iteration,
-    day = state.day,
-    exercise_number = state.exercise_number,
-    exercise_id = state.exercise.id,
-    duration = duration,
-    attempts = state.attempts,
-    hints_used = #state.hints_used,
-    solution_viewed = state.solution_viewed,
-    score = score,
-    timestamp = os.time(),
-  })
-
-  return {
-    success = true,
-    score = score,
-    duration = duration,
-    attempts = state.attempts,
-  }
+  return false, 'Not quite right. Try again or request a hint.'
 end
 
---- Zeigt einen Hint an
----@param state LearnCLI.ExerciseState
----@param level integer|nil Hint-Level (default: nächster)
-function M.show_hint(state, level)
-  if state.solution_viewed then
-    notify.warn("Lösung wurde bereits angezeigt - keine Hints mehr verfügbar")
+--- Show solution for current exercise
+---@param exercise_state table
+---@return nil
+function M.show_solution(exercise_state)
+  if type(exercise_state) ~= 'table' then
     return
   end
 
-  -- Bestimme Level
-  local hint_level = level or (#state.hints_used + 1)
-
-  -- Prüfe ob Hint existiert
-  if not state.exercise.hints or not state.exercise.hints[hint_level] then
-    notify.error(string.format("Kein Hint auf Level %d verfügbar", hint_level))
+  local current_exercise = state.get_current_exercise()
+  if not current_exercise then
+    vim.notify(
+      'No exercise loaded',
+      vim.log.levels.WARN,
+      { title = 'Learn CLI' }
+    )
     return
   end
 
-  local hint = state.exercise.hints[hint_level]
-
-  -- Prüfe ob Hint bereits verwendet wurde
-  if vim.tbl_contains(state.hints_used, hint_level) then
-    notify.info("Hint wurde bereits angezeigt:")
-  else
-    table.insert(state.hints_used, hint_level)
-    notify.warn(string.format("Hint %d (-%d Punkte)", hint_level, hint.cost))
+  if not M.buf or not vim.api.nvim_buf_is_valid(M.buf) then
+    vim.notify(
+      'Exercise view not initialized',
+      vim.log.levels.WARN,
+      { title = 'Learn CLI' }
+    )
+    return
   end
 
-  -- Hint anzeigen
-  require("learn_cli.ui.exercise_view").show_hint(state, hint)
-end
-
---- Zeigt die Lösung an
----@param state LearnCLI.ExerciseState
-function M.show_solution(state)
-  if state.solution_viewed then
-    notify.info("Lösung wurde bereits angezeigt")
-  else
-    state.solution_viewed = true
-
-    local penalty = state.exercise.scoring and
-                    state.exercise.scoring.hint_penalty and
-                    state.exercise.scoring.hint_penalty.viewed_solution or 50
-
-    notify.warn(string.format("Lösung angezeigt (-%d Punkte)", math.abs(penalty)))
-  end
-
-  require("learn_cli.ui.exercise_view").show_solution(state)
-end
-
---- Beendet das Exercise (ohne zu speichern)
----@param state LearnCLI.ExerciseState
-function M.quit(state)
-  -- Zurück zum Original Directory
-  vim.cmd("cd " .. state.original_dir)
-
-  -- Cleanup falls konfiguriert
-  if state.exercise.setup and state.exercise.setup.cleanup then
-    vim.fn.delete(state.working_dir, "rf")
-  end
-
-  -- UI schließen
-  require("learn_cli.ui.exercise_view").close()
-
-  notify.info("Exercise beendet")
-end
-
---- Cleanup nach Exercise (bei Erfolg)
----@param state LearnCLI.ExerciseState
-function M.cleanup(state)
-  -- Zurück zum Original Directory
-  vim.cmd("cd " .. state.original_dir)
-
-  -- Working Directory löschen falls cleanup aktiviert
-  if state.exercise.setup and state.exercise.setup.cleanup then
-    vim.fn.delete(state.working_dir, "rf")
-  end
-end
-
---- Zeigt Exercise-Informationen
----@param state LearnCLI.ExerciseState
----@return table info
-function M.get_info(state)
-  local duration = os.time() - state.start_time
-
-  return {
-    title = state.exercise.title,
-    difficulty = state.exercise.difficulty,
-    points_max = state.exercise.points_max,
-    duration = duration,
-    attempts = state.attempts,
-    hints_available = state.exercise.hints and #state.exercise.hints or 0,
-    hints_used = #state.hints_used,
-    solution_viewed = state.solution_viewed,
-    status = state.status,
+  local lines = {
+    '',
+    '  ' .. string.rep('═', 50),
+    '  📖 Solution:',
+    '  ' .. string.rep('═', 50),
+    '',
+    '  ' .. (current_exercise.solution or 'No solution available'),
+    '',
   }
+
+  local ok = pcall(function()
+    vim.api.nvim_set_option_value('modifiable', true, { buf = M.buf })
+    vim.api.nvim_buf_set_lines(M.buf, -1, -1, false, lines)
+    vim.api.nvim_set_option_value('modifiable', false, { buf = M.buf })
+  end)
+
+  if not ok then
+    vim.notify(
+      'Failed to display solution',
+      vim.log.levels.ERROR,
+      { title = 'Learn CLI' }
+    )
+  end
+
+  -- Mark exercise as completed with penalty
+  exercise_state.solution_shown = true
 end
 
 return M

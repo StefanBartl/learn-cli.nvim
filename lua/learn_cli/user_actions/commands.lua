@@ -1,150 +1,162 @@
 ---@module 'learn_cli.user_actions.commands'
----@brief Vim command definitions for learn-cli.nvim
----@description
---- Defines all user-facing Ex commands for the plugin.
+---@brief User commands for learn_cli.nvim
 
 local M = {}
 
----Register all commands (alias for setup for backward compatibility)
----@return nil
-function M.register()
-  M.setup()
-end
+-- Dependencies
+local config = require('learn_cli.config')
 
----Setup all commands
+--- Setup all user commands
 ---@return nil
 function M.setup()
-  -- LearnCli - Zeigt Dashboard
-  vim.api.nvim_create_user_command("LearnCli", function(opts)
-    if opts.args ~= "" then
-      require("learn_cli").start_cycle(opts.args)
+  -- Toggle dashboard
+  vim.api.nvim_create_user_command('LearnCLIDashboard', function()
+    require('learn_cli.ui.dashboard').toggle()
+  end, {
+    desc = 'Toggle Learn CLI dashboard'
+  })
+
+  -- Next exercise
+  vim.api.nvim_create_user_command('LearnCLINext', function()
+    local state = require('learn_cli.state')
+    local ok = state.next_exercise()
+
+    if ok then
+      local progress = state.get_progress()
+      vim.notify(
+        string.format('Exercise %d/%d', progress.current_exercise, progress.total_exercises),
+        config.notify_level,
+        { title = 'Learn CLI' }
+      )
+
+      -- Refresh dashboard if open
+      local dashboard = require('learn_cli.ui.dashboard')
+      dashboard.refresh()
     else
-      require("learn_cli").start()
+      vim.notify('Last exercise of the day', vim.log.levels.INFO, { title = 'Learn CLI' })
     end
   end, {
-    nargs = "?",
-    complete = function()
-      return require("learn_cli.core.cycle_manager").list_cycle_ids()
-    end,
-    desc = "Start Learn CLI (with optional cycle ID)",
+    desc = 'Move to next exercise'
   })
 
-  -- LearnCliContinue - Setzt letzten Cycle fort
-  vim.api.nvim_create_user_command("LearnCliContinue", function()
-    require("learn_cli").continue_cycle()
-  end, {
-    desc = "Continue last cycle",
-  })
+  -- Previous exercise
+  vim.api.nvim_create_user_command('LearnCLIPrev', function()
+    local state = require('learn_cli.state')
+    local ok = state.prev_exercise()
 
-  -- LearnCliSubmit - Reicht Lösung ein
-  vim.api.nvim_create_user_command("LearnCliSubmit", function()
-    local state = require("learn_cli.state")
-    local ex_state = state.get_current_exercise_state()
+    if ok then
+      local progress = state.get_progress()
+      vim.notify(
+        string.format('Exercise %d/%d', progress.current_exercise, progress.total_exercises),
+        config.notify_level,
+        { title = 'Learn CLI' }
+      )
 
-    if not ex_state then
-      require("learn_cli.utils.notify").warn("Kein aktives Exercise")
-      return
-    end
-
-    local runner = require("learn_cli.core.exercise_runner")
-    local result = runner.submit(ex_state)
-
-    if result.success then
-      -- Cleanup
-      runner.cleanup(ex_state)
-
-      -- Nächstes Exercise nach 2 Sekunden
-      vim.defer_fn(function()
-        require("learn_cli").next_exercise()
-      end, 2000)
+      local dashboard = require('learn_cli.ui.dashboard')
+      dashboard.refresh()
+    else
+      vim.notify('First exercise of the day', vim.log.levels.INFO, { title = 'Learn CLI' })
     end
   end, {
-    desc = "Submit exercise solution",
+    desc = 'Move to previous exercise'
   })
 
-  -- LearnCliHint - Zeigt Hint
-  vim.api.nvim_create_user_command("LearnCliHint", function(opts)
-    local state = require("learn_cli.state")
-    local ex_state = state.get_current_exercise_state()
+  -- Show cycle info
+  vim.api.nvim_create_user_command('LearnCLIInfo', function()
+    local state = require('learn_cli.state')
+    local info = state.get_cycle_info()
+    local progress = state.get_progress()
 
-    if not ex_state then
-      require("learn_cli.utils.notify").warn("Kein aktives Exercise")
-      return
-    end
+    local msg = string.format([[
+Cycle: %s
+Description: %s
+Progress: Day %d/%d
+Iteration: %d/%d
+Current Exercise: %d/%d
+]],
+      info.name,
+      info.description,
+      progress.current_day,
+      progress.total_days,
+      progress.current_iteration,
+      progress.total_iterations,
+      progress.current_exercise,
+      progress.total_exercises
+    )
 
-    local level = opts.args ~= "" and tonumber(opts.args) or nil
-    require("learn_cli.core.exercise_runner").show_hint(ex_state, level)
+    vim.notify(msg, vim.log.levels.INFO, { title = 'Learn CLI Info' })
   end, {
-    nargs = "?",
-    desc = "Show hint (optional: level)",
+    desc = 'Show current cycle information'
   })
 
-  -- LearnCliSolution - Zeigt Lösung
-  vim.api.nvim_create_user_command("LearnCliSolution", function()
-    local state = require("learn_cli.state")
-    local ex_state = state.get_current_exercise_state()
-
-    if not ex_state then
-      require("learn_cli.utils.notify").warn("Kein aktives Exercise")
-      return
-    end
-
-    require("learn_cli.core.exercise_runner").show_solution(ex_state)
-  end, {
-    desc = "Show solution",
-  })
-
-  -- LearnCliQuit - Beendet Exercise
-  vim.api.nvim_create_user_command("LearnCliQuit", function()
-    local state = require("learn_cli.state")
-    local ex_state = state.get_current_exercise_state()
-
-    if not ex_state then
-      require("learn_cli.utils.notify").warn("Kein aktives Exercise")
-      return
-    end
-
-    require("learn_cli.core.exercise_runner").quit(ex_state)
-    state.set_current_exercise_state(nil)
-  end, {
-    desc = "Quit current exercise",
-  })
-
-  -- LearnCliProgress - Zeigt Progress
-  vim.api.nvim_create_user_command("LearnCliProgress", function()
-    local progress = require("learn_cli.state.progress")
-    local stats = progress.get_statistics()
-    local level, xp = progress.get_level()
-
-    local lines = {
-      "=== Learn CLI Progress ===",
-      "",
-      string.format("Level: %d", level),
-      string.format("XP: %d", xp),
-      "",
-      string.format("Exercises Completed: %d", stats.exercises_completed),
-      string.format("Perfect Scores: %d", stats.perfect_scores),
-      string.format("Current Streak: %d days", stats.streak),
-      string.format("Total Time: %d minutes", math.floor(stats.total_time / 60)),
-    }
-
-    require("learn_cli.utils.notify").info(table.concat(lines, "\n"))
-  end, {
-    desc = "Show progress statistics",
-  })
-
-  -- LearnCliReset - Reset Progress (für Testing)
-  vim.api.nvim_create_user_command("LearnCliReset", function()
+  -- Reset progress
+  vim.api.nvim_create_user_command('LearnCLIReset', function()
     vim.ui.input({
-      prompt = "Reset ALL progress? Type 'yes' to confirm: ",
+      prompt = 'Reset all progress? (yes/no): ',
     }, function(input)
-      if input == "yes" then
-        require("learn_cli.state.progress").reset()
-        require("learn_cli.utils.notify").info("Progress reset")
+      if input and input:lower() == 'yes' then
+        local state = require('learn_cli.state')
+        state.reset_progress()
+        vim.notify('Progress reset', vim.log.levels.INFO, { title = 'Learn CLI' })
+
+        local dashboard = require('learn_cli.ui.dashboard')
+        dashboard.refresh()
       end
     end)
   end, {
-    desc = "Reset all progress (DANGEROUS!)",
+    desc = 'Reset all progress (requires confirmation)'
+  })
+
+  -- Create cycle template
+  vim.api.nvim_create_user_command('LearnCLICreateCycle', function(cmd_opts)
+    local args = vim.split(cmd_opts.args or '', '%s+')
+    local cycle_name = args[1]
+    local custom_path = args[2]
+
+    if not cycle_name or cycle_name == '' then
+      vim.notify(
+        'Usage: :LearnCLICreateCycle <cycle_name> [path]',
+        vim.log.levels.ERROR,
+        { title = 'Learn CLI' }
+      )
+      return
+    end
+
+    vim.notify(
+      string.format('Creating cycle template: %s...', cycle_name),
+      vim.log.levels.INFO,
+      { title = 'Learn CLI' }
+    )
+
+    local template_gen = require('learn_cli.template_generator')
+    local ok, err = template_gen.create_cycle_template({
+      cycle_name = cycle_name,
+      path = custom_path,
+      iterations = 3,
+      days_per_iteration = 7,
+    })
+
+    if ok then
+      local path = custom_path or config.exercises_path
+      local cycle_path = path .. '/cycles/' .. cycle_name
+      vim.notify(
+        string.format('Cycle template created: %s', cycle_path),
+        vim.log.levels.INFO,
+        { title = 'Learn CLI' }
+      )
+    else
+      vim.notify(
+        string.format('Failed to create cycle: %s', err or 'unknown error'),
+        vim.log.levels.ERROR,
+        { title = 'Learn CLI' }
+      )
+    end
+  end, {
+    nargs = '*',
+    desc = 'Create new cycle template with structure',
+    complete = function()
+      return { 'cycle_01', 'cycle_02', 'cycle_03' }
+    end
   })
 end
 

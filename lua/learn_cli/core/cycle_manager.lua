@@ -11,25 +11,6 @@ local M = {}
 
 local yaml_parser = require("learn_cli.utils.yaml_parser")
 
----@class LearnCLI.CycleMetadata
----@field cycle_id string
----@field title string
----@field version string
----@field iterations integer
----@field days_per_cycle integer
----@field duration_per_day string
-
----@class LearnCLI.CycleProgress
----@field current_iteration integer
----@field current_day integer
----@field current_exercise integer
----@field completed boolean
-
----@class LearnCLI.Cycle
----@field metadata LearnCLI.CycleMetadata
----@field data table Raw YAML data
----@field progress LearnCLI.CycleProgress
-
 --- Initialisiert den Cycle Manager
 function M.init()
   -- Erstelle exercises Verzeichnis falls nicht vorhanden
