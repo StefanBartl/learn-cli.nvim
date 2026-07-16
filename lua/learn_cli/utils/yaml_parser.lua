@@ -32,59 +32,15 @@ function M.decode(yaml_str)
 
 end
 
---- Sehr einfacher YAML Parser (nur für Basics)
+--- Einfacher YAML Parser (nur für Basics). Delegiert an lib.lua.yaml, das
+--- (anders als die vorherige Eigenimplementierung hier) Einrückungsebenen
+--- korrekt trackt — die alte Version hat ihren Nesting-Stack nie wieder
+--- verlassen, sodass alles nach dem ersten verschachtelten Block fälschlich
+--- darin landete.
 ---@param yaml_str string
 ---@return table|nil data, string|nil error
 function M.simple_parse(yaml_str)
-  -- WARNUNG: Dies ist ein SEHR einfacher Parser
-  -- Funktioniert nur für simple key: value Strukturen
-  -- Für Production sollte lyaml verwendet werden!
-
-  local result = {}
-  local current_table = result
-  local stack = {}
-
-  for line in yaml_str:gmatch("[^\r\n]+") do
-    -- Leerzeilen und Kommentare ignorieren
-    if line:match("^%s*$") or line:match("^%s*#") then
-      goto continue
-    end
-
-    -- Indentation messen
-    -- local indent = #line:match("^%s*")
-    local content = line:match("^%s*(.+)")
-
-    -- Key: Value
-    local key, value = content:match("^([^:]+):%s*(.*)")
-    if key then
-      key = key:gsub("^%s+", ""):gsub("%s+$", "")
-      value = value:gsub("^%s+", ""):gsub("%s+$", "")
-
-      if value == "" then
-        -- Nested object
-        current_table[key] = {}
-        table.insert(stack, current_table)
-        current_table = current_table[key]
-      else
-        -- Parse value
-        if value == "true" then
-          current_table[key] = true
-        elseif value == "false" then
-          current_table[key] = false
-        elseif value:match("^%d+$") then
-          current_table[key] = tonumber(value)
-        elseif value:match('^".-"$') or value:match("^'.-'$") then
-          current_table[key] = value:sub(2, -2)
-        else
-          current_table[key] = value
-        end
-      end
-    end
-
-    ::continue::
-  end
-
-  return result, nil
+  return require("lib.lua.yaml").simple_parse(yaml_str)
 end
 
 --- Enkodiert Lua Table zu YAML String
