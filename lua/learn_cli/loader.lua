@@ -7,27 +7,22 @@
 local M = {}
 local config = require('learn_cli.config')
 
---- Safe file read with error handling
+--- Safe file read with error handling. Delegates the actual read to
+--- lib.nvim.fs.read; keeps the "empty file is an error" rule, which is
+--- specific to this module's domain (an empty exercise/info file isn't
+--- meaningfully loadable, unlike lib.nvim.fs.read's generic contract where
+--- an empty file is valid content).
 ---@param filepath string Path to file
 ---@return string? content File content or nil if failed
 ---@return string? error Error message if failed
 local function safe_read_file(filepath)
-  if vim.fn.filereadable(filepath) == 0 then
-    return nil, string.format('File not found: %s', filepath)
+  local content, err = require('lib.nvim.fs.read')(filepath)
+  if not content then
+    return nil, err
   end
-
-  local file, err = io.open(filepath, 'r')
-  if not file then
-    return nil, string.format('Failed to open file: %s (%s)', filepath, err or 'unknown')
-  end
-
-  local content = file:read('*a')
-  file:close()
-
-  if not content or content == '' then
+  if content == '' then
     return nil, string.format('Empty file: %s', filepath)
   end
-
   return content
 end
 
