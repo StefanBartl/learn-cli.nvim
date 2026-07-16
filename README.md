@@ -45,11 +45,15 @@ An interactive learning platform for mastering CLI tools directly in Neovim. Pra
 
 ## 📦 Installation
 
+Requires [lib.nvim](https://github.com/StefanBartl/lib.nvim) — used for
+notifications and state-file I/O.
+
 ### Using [lazy.nvim](https://github.com/folke/lazy.nvim)
 
 ```lua
 {
   'StefanBartl/learn-cli.nvim',
+  dependencies = { "StefanBartl/lib.nvim" },
   config = function()
     require('learn_cli').setup({
       -- Your configuration here
@@ -63,6 +67,7 @@ An interactive learning platform for mastering CLI tools directly in Neovim. Pra
 ```lua
 use {
   'StefanBartl/learn-cli.nvim',
+  requires = { "StefanBartl/lib.nvim" },
   config = function()
     require('learn_cli').setup()
   end

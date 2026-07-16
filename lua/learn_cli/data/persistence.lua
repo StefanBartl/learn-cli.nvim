@@ -3,9 +3,16 @@
 ---@description
 --- Handles serialization and deserialization of plugin state,
 --- including progress, scores, and session data.
+---
+--- I/O goes through lib.nvim.fs.json (atomic write, JSON encode/decode) and
+--- lib.nvim.cross.fs.mutate (backup copy) rather than hand-rolled
+--- io.open/vim.json.encode calls. The `LearnCLI.OperationResult` contract
+--- (`{ ok, error, data }`) is unchanged, so this is an internal swap only.
 
 local config = require("learn_cli.config")
 local state = require("learn_cli.state")
+local json = require("lib.nvim.fs.json")
+local fsops = require("lib.nvim.cross.fs.mutate")
 
 ---@class LearnCLI.Persistence
 local M = {}
@@ -17,41 +24,12 @@ local function get_state_file()
   return data_dir .. "/state.json"
 end
 
----Serialize state to JSON string
----@param data table State data to serialize
----@return string|nil json Serialized JSON or nil on error
----@return string|nil error Error message if failed
-local function serialize(data)
-  local ok, result = pcall(vim.json.encode, data)
-
-  if not ok then
-    return nil, "Failed to serialize state: " .. tostring(result)
-  end
-
-  return result, nil
-end
-
----Deserialize JSON string to table
----@param json string JSON string to deserialize
----@return table|nil data Deserialized data or nil on error
----@return string|nil error Error message if failed
-local function deserialize(json)
-  local ok, result = pcall(vim.json.decode, json)
-
-  if not ok then
-    return nil, "Failed to deserialize state: " .. tostring(result)
-  end
-
-  return result, nil
-end
-
 ---Save current state to disk
 ---@return LearnCLI.OperationResult result Operation result
 function M.save()
   local ok, result = pcall(function()
     local snapshot = state.get_snapshot()
 
-    -- Check if snapshot is valid
     if not snapshot or type(snapshot) ~= "table" then
       return {
         ok = false,
@@ -60,30 +38,15 @@ function M.save()
       }
     end
 
-    -- Serialize state
-    local json, err = serialize(snapshot)
-    if not json then
-      return {
-        ok = false,
-        error = err,
-        data = nil
-      }
-    end
-
-    -- Write to file
     local file_path = get_state_file()
-    local file = io.open(file_path, "w")
-
-    if not file then
+    local write_ok, write_err = json.write(file_path, snapshot)
+    if not write_ok then
       return {
         ok = false,
-        error = "Failed to open state file for writing: " .. file_path,
+        error = write_err,
         data = nil
       }
     end
-
-    file:write(json)
-    file:close()
 
     return {
       ok = true,
@@ -109,31 +72,17 @@ function M.load()
   local ok, result = pcall(function()
     local file_path = get_state_file()
 
-    -- Check if file exists
+    -- Missing state file is expected on first run, not an error — checked
+    -- before reading so that case never goes through json.read's error path.
     if vim.fn.filereadable(file_path) ~= 1 then
       return {
         ok = true,
         error = nil,
-        data = nil -- No state file yet, not an error
-      }
-    end
-
-    -- Read file
-    local file = io.open(file_path, "r")
-
-    if not file then
-      return {
-        ok = false,
-        error = "Failed to open state file for reading: " .. file_path,
         data = nil
       }
     end
 
-    local json = file:read("*all")
-    file:close()
-
-    -- Deserialize
-    local data, err = deserialize(json)
+    local data, err = json.read(file_path)
     if not data then
       return {
         ok = false,
@@ -175,12 +124,12 @@ function M.backup()
     end
 
     local backup_path = file_path .. ".backup." .. os.time()
-    local success = vim.loop.fs_copyfile(file_path, backup_path)
+    local copy_ok, copy_err = fsops.copy_file(file_path, backup_path)
 
-    if not success then
+    if not copy_ok then
       return {
         ok = false,
-        error = "Failed to create backup",
+        error = "Failed to create backup: " .. tostring(copy_err),
         data = nil
       }
     end
@@ -210,7 +159,6 @@ function M.export(export_path)
   local ok, result = pcall(function()
     local snapshot = state.get_snapshot()
 
-    -- Check if snapshot is valid
     if not snapshot or type(snapshot) ~= "table" then
       return {
         ok = false,
@@ -219,29 +167,14 @@ function M.export(export_path)
       }
     end
 
-    -- Serialize
-    local json, err = serialize(snapshot)
-    if not json then
+    local write_ok, write_err = json.write(export_path, snapshot)
+    if not write_ok then
       return {
         ok = false,
-        error = err,
+        error = write_err,
         data = nil
       }
     end
-
-    -- Write to export path
-    local file = io.open(export_path, "w")
-
-    if not file then
-      return {
-        ok = false,
-        error = "Failed to open export file: " .. export_path,
-        data = nil
-      }
-    end
-
-    file:write(json)
-    file:close()
 
     return {
       ok = true,
@@ -266,7 +199,6 @@ end
 ---@return LearnCLI.OperationResult result Operation result
 function M.import(import_path)
   local ok, result = pcall(function()
-    -- Read file
     if vim.fn.filereadable(import_path) ~= 1 then
       return {
         ok = false,
@@ -275,21 +207,7 @@ function M.import(import_path)
       }
     end
 
-    local file = io.open(import_path, "r")
-
-    if not file then
-      return {
-        ok = false,
-        error = "Failed to open import file: " .. import_path,
-        data = nil
-      }
-    end
-
-    local json = file:read("*all")
-    file:close()
-
-    -- Deserialize
-    local data, err = deserialize(json)
+    local data, err = json.read(import_path)
     if not data then
       return {
         ok = false,
@@ -298,13 +216,11 @@ function M.import(import_path)
       }
     end
 
-    -- Restore to state
     local restore_result = state.restore_snapshot(data)
     if not restore_result.ok then
       return restore_result
     end
 
-    -- Save the imported state
     M.save()
 
     return {
