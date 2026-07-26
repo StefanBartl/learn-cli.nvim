@@ -91,18 +91,19 @@ Current Exercise: %d/%d
 
   -- Reset progress
   vim.api.nvim_create_user_command('LearnCLIReset', function()
-    vim.ui.input({
-      prompt = 'Reset all progress? (yes/no): ',
-    }, function(input)
-      if input and input:lower() == 'yes' then
-        local state = require('learn_cli.state')
-        state.reset_progress()
-        vim.notify('Progress reset', vim.log.levels.INFO, { title = 'Learn CLI' })
+    require('lib.nvim.ui.kit').confirm({
+      question = 'Reset all progress?',
+      on_answer = function(yes)
+        if yes then
+          local state = require('learn_cli.state')
+          state.reset_progress()
+          vim.notify('Progress reset', vim.log.levels.INFO, { title = 'Learn CLI' })
 
-        local dashboard = require('learn_cli.ui.dashboard')
-        dashboard.refresh()
-      end
-    end)
+          local dashboard = require('learn_cli.ui.dashboard')
+          dashboard.refresh()
+        end
+      end,
+    })
   end, {
     desc = 'Reset all progress (requires confirmation)'
   })
