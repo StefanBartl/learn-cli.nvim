@@ -10,14 +10,14 @@
 local M = {}
 
 local yaml_parser = require("learn_cli.utils.yaml_parser")
+local is_readable_file = require("lib.nvim.fs.is_readable_file")
+local fs_read = require("lib.nvim.fs.read")
 
 --- Initialisiert den Cycle Manager
 function M.init()
   -- Erstelle exercises Verzeichnis falls nicht vorhanden
   local exercises_dir = vim.fn.stdpath("config") .. "/exercises"
-  if vim.fn.isdirectory(exercises_dir) == 0 then
-    vim.fn.mkdir(exercises_dir, "p")
-  end
+  require("lib.nvim.fs.mkdirp")(exercises_dir)
 end
 
 --- Lädt verfügbare Cycles
@@ -34,7 +34,7 @@ function M.list_cycle_ids()
 
   for _, dir in ipairs(dirs) do
     local metadata_path = string.format("%s/%s/metadata.yaml", exercises_dir, dir)
-    if vim.fn.filereadable(metadata_path) == 1 then
+    if is_readable_file(metadata_path) then
       table.insert(cycles, dir)
     end
   end
@@ -50,17 +50,17 @@ function M.load_cycle(cycle_id)
   local metadata_path = string.format("%s/%s/metadata.yaml", exercises_dir, cycle_id)
 
   -- Prüfe ob Datei existiert
-  if vim.fn.filereadable(metadata_path) == 0 then
+  if not is_readable_file(metadata_path) then
     return nil, string.format("Cycle nicht gefunden: %s", cycle_id)
   end
 
   -- Lade YAML
-  local ok, content = pcall(vim.fn.readfile, metadata_path)
-  if not ok then
-    return nil, string.format("Fehler beim Lesen: %s", content)
+  local content, read_err = fs_read(metadata_path)
+  if not content then
+    return nil, string.format("Fehler beim Lesen: %s", read_err)
   end
 
-  local cycle_data, err = yaml_parser.decode(table.concat(content, "\n"))
+  local cycle_data, err = yaml_parser.decode(content)
   if err or not cycle_data then
     return nil, string.format("Fehler beim Parsen: %s", err)
   end
@@ -91,16 +91,16 @@ function M.load_day(cycle_id, iteration, day_number)
     day_number
   )
 
-  if vim.fn.filereadable(day_path) == 0 then
+  if not is_readable_file(day_path) then
     return nil, string.format("Tag nicht gefunden: day_%02d", day_number)
   end
 
-  local ok, content = pcall(vim.fn.readfile, day_path)
-  if not ok then
-    return nil, string.format("Fehler beim Lesen: %s", content)
+  local content, read_err = fs_read(day_path)
+  if not content then
+    return nil, string.format("Fehler beim Lesen: %s", read_err)
   end
 
-  local day_data, err = yaml_parser.decode(table.concat(content, "\n"))
+  local day_data, err = yaml_parser.decode(content)
   if err then
     return nil, string.format("Fehler beim Parsen: %s", err)
   end
@@ -142,16 +142,16 @@ function M.load_info_unit(cycle_id, iteration, half_cycle)
     half_cycle
   )
 
-  if vim.fn.filereadable(info_path) == 0 then
+  if not is_readable_file(info_path) then
     return nil, string.format("Info-Einheit nicht gefunden: info_%s.md", half_cycle)
   end
 
-  local ok, lines = pcall(vim.fn.readfile, info_path)
-  if not ok then
-    return nil, string.format("Fehler beim Lesen: %s", lines)
+  local content, read_err = fs_read(info_path)
+  if not content then
+    return nil, string.format("Fehler beim Lesen: %s", read_err)
   end
 
-  return table.concat(lines, "\n")
+  return content
 end
 
 --- Prüft ob Info-Einheit angezeigt werden sollte
@@ -278,16 +278,16 @@ function M.get_cycle_info(cycle_id)
   local exercises_dir = vim.fn.stdpath("config") .. "/exercises/cycles"
   local metadata_path = string.format("%s/%s/metadata.yaml", exercises_dir, cycle_id)
 
-  if vim.fn.filereadable(metadata_path) == 0 then
+  if not is_readable_file(metadata_path) then
     return nil
   end
 
-  local ok, content = pcall(vim.fn.readfile, metadata_path)
-  if not ok then
+  local content = fs_read(metadata_path)
+  if not content then
     return nil
   end
 
-  local cycle_data = yaml_parser.decode(table.concat(content, "\n"))
+  local cycle_data = yaml_parser.decode(content)
   if not cycle_data then
     return nil
   end

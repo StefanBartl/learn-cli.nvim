@@ -113,21 +113,19 @@ end
 function M.validate_file_content(validation)
   local file = validation.file
 
-  if vim.fn.filereadable(file) == 0 then
+  if not require('lib.nvim.fs.is_readable_file')(file) then
     return {
       success = false,
       errors = {string.format("❌ Datei nicht gefunden: %s", file)}
     }
   end
 
-  local lines = vim.fn.readfile(file)
-  local actual = table.concat(lines, "\n")
+  local actual = require('lib.nvim.fs.read')(file) or ""
 
   -- Expected content ermitteln
   local expected
   if validation.expected_from_file then
-    local exp_lines = vim.fn.readfile(validation.expected_from_file)
-    expected = table.concat(exp_lines, "\n")
+    expected = require('lib.nvim.fs.read')(validation.expected_from_file) or ""
   else
     expected = validation.expected
   end
@@ -160,7 +158,7 @@ end
 function M.validate_file_exists(validation)
   local file = validation.file
 
-  if vim.fn.filereadable(file) == 0 then
+  if not require('lib.nvim.fs.is_readable_file')(file) then
     return {
       success = false,
       errors = {string.format("❌ Datei nicht gefunden: %s", file)}
@@ -321,15 +319,14 @@ function M.validate_pattern(validation)
   local pattern = validation.regex
   local forbidden = validation.forbidden_literal
 
-  if vim.fn.filereadable(file) == 0 then
+  if not require('lib.nvim.fs.is_readable_file')(file) then
     return {
       success = false,
       errors = {string.format("❌ Datei nicht gefunden: %s", file)}
     }
   end
 
-  local lines = vim.fn.readfile(file)
-  local content = table.concat(lines, "\n")
+  local content = require('lib.nvim.fs.read')(file) or ""
 
   -- Pattern match
   if not content:match(pattern) then

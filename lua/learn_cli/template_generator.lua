@@ -30,13 +30,9 @@ ensure_dir = function(path)
     return false, 'Invalid path'
   end
 
-  if vim.fn.isdirectory(path) == 1 then
-    return true
-  end
-
-  local ok = vim.fn.mkdir(path, 'p')
-  if ok == 0 then
-    return false, string.format('Failed to create: %s', path)
+  local ok, err = require('lib.nvim.fs.mkdirp')(path)
+  if not ok then
+    return false, err or string.format('Failed to create: %s', path)
   end
 
   return true
@@ -55,15 +51,7 @@ write_file = function(filepath, content)
     return false, 'Invalid content'
   end
 
-  local ok, file = pcall(io.open, filepath, 'w')
-  if not ok or not file then
-    return false, string.format('Failed to open: %s', filepath)
-  end
-
-  file:write(content)
-  file:close()
-
-  return true
+  return require('lib.nvim.fs.write.to_file')(filepath, content)
 end
 
 --- Generate metadata.yaml content

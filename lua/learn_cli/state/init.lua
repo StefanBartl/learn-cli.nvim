@@ -8,6 +8,7 @@ local M = {}
 
 -- Dependencies
 local config = require('learn_cli.config')
+local loader = require('learn_cli.loader')
 
 -- Forward declarations
 local load_cycle_metadata
@@ -29,55 +30,12 @@ local exercises = nil
 ---@type LearnCLI.InfoFileMap?
 local info_files = nil
 
---- Safe file read with error handling
----@param filepath string
----@return string? content
----@return string? error
-local function safe_read_file(filepath)
-  if type(filepath) ~= 'string' then
-    return nil, 'Invalid filepath type'
-  end
-
-  if vim.fn.filereadable(filepath) == 0 then
-    return nil, string.format('File not found: %s', filepath)
-  end
-
-  local ok, file = pcall(io.open, filepath, 'r')
-  if not ok or not file then
-    return nil, string.format('Failed to open: %s', filepath)
-  end
-
-  local content = file:read('*a')
-  file:close()
-
-  if not content or content == '' then
-    return nil, 'Empty file'
-  end
-
-  return content
-end
-
---- Simple YAML parser for basic key-value pairs
----@param content string
----@return table
-local function parse_yaml_simple(content)
-  local result = {}
-
-  for line in content:gmatch('[^\r\n]+') do
-    if not line:match('^%s*#') and not line:match('^%s*$') then
-      local key, value = line:match('^([%w_]+):%s*(.*)$')
-      if key and value then
-        value = value:gsub('^["\']', ''):gsub('["\']$', '')
-        local num = tonumber(value)
-        result[key] = num or value
-      end
-    end
-  end
-
-  return result
-end
-
---- Load cycle metadata
+--- Load cycle metadata. Delegates the actual file read + YAML parse to
+--- `learn_cli.loader` (already migrated onto `lib.nvim.fs.read`) — this
+--- used to carry its own byte-for-byte copy of that logic, which drifted
+--- into a second, unmigrated implementation. Only the field-defaulting
+--- shape specific to `LearnCLI.CycleMetadata` (`difficulty`/`topics`)
+--- stays local, since `loader.load_cycle_metadata` doesn't apply it.
 ---@param cycle_name string
 ---@return LearnCLI.CycleMetadata? metadata
 ---@return string? error
@@ -86,18 +44,12 @@ load_cycle_metadata = function(cycle_name)
     return nil, 'Invalid cycle name'
   end
 
-  local cycle_path = config.get_cycle_path(cycle_name)
-  local metadata_file = cycle_path .. '/metadata.yaml'
-
-  local content, err = safe_read_file(metadata_file)
-  if not content then
+  local data, err = loader.load_cycle_metadata(cycle_name)
+  if not data then
     return nil, err
   end
 
-  local data = parse_yaml_simple(content)
-
-  -- Ensure required fields with consistent naming
-  local metadata = {
+  return {
     name = data.name or cycle_name,
     description = data.description or 'No description',
     iterations = tonumber(data.iterations) or 3,
@@ -105,11 +57,11 @@ load_cycle_metadata = function(cycle_name)
     difficulty = data.difficulty or 'unknown',
     topics = {},
   }
-
-  return metadata
 end
 
---- Load exercises for specific day
+--- Load exercises for specific day. Delegates to `learn_cli.loader`; only
+--- the input validation (returning a descriptive error instead of letting
+--- a bad argument reach `string.format`) stays local.
 ---@param cycle_name string
 ---@param iteration integer
 ---@param day integer
@@ -126,72 +78,16 @@ load_exercises = function(cycle_name, iteration, day)
     return nil, 'Invalid day'
   end
 
-  local cycle_path = config.get_cycle_path(cycle_name)
-  local ex_file = string.format(
-    '%s/iteration_%d/day_%02d/exercises.yaml',
-    cycle_path, iteration, day
-  )
-
-  local content, err = safe_read_file(ex_file)
-  if not content then
-    return nil, err
-  end
-
-  local exercises_list = {}
-  local current_ex = nil
-
-  for line in content:gmatch('[^\r\n]+') do
-    if not line:match('^%s*#') and not line:match('^%s*$') then
-      if line:match('^%s*-%s*id:') then
-        if current_ex then
-          table.insert(exercises_list, current_ex)
-        end
-        current_ex = { id = tonumber(line:match('id:%s*(%d+)')) }
-      elseif current_ex then
-        local key, value = line:match('^%s*([%w_]+):%s*(.*)$')
-        if key and value then
-          value = value:gsub('^["\']', ''):gsub('["\']$', '')
-          current_ex[key] = value
-        end
-      end
-    end
-  end
-
-  if current_ex then
-    table.insert(exercises_list, current_ex)
-  end
-
-  if #exercises_list == 0 then
-    return nil, 'No exercises found'
-  end
-
-  return exercises_list
+  return loader.load_exercises(cycle_name, iteration, day)
 end
 
---- Load info markdown files
+--- Load info markdown files. Delegates to `learn_cli.loader`.
 ---@param cycle_name string
 ---@param iteration integer
 ---@param day integer
 ---@return LearnCLI.InfoFileMap
 load_info_files = function(cycle_name, iteration, day)
-  local cycle_path = config.get_cycle_path(cycle_name)
-  local day_path = string.format(
-    '%s/iteration_%d/day_%02d',
-    cycle_path, iteration, day
-  )
-
-  local files = {}
-
-  for _, suffix in ipairs({'a', 'b', 'c', 'd'}) do
-    local info_file = string.format('%s/info_%s.md', day_path, suffix)
-    local content = safe_read_file(info_file)
-
-    if content then
-      files[suffix] = content
-    end
-  end
-
-  return files
+  return loader.load_info_files(cycle_name, iteration, day)
 end
 
 --- Initialize state from saved progress or defaults

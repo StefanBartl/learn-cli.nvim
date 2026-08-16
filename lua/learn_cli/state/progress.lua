@@ -3,22 +3,20 @@
 
 local M = {}
 
+local is_readable_file = require("lib.nvim.fs.is_readable_file")
+local fs_json = require("lib.nvim.fs.json")
+
 local storage_file = vim.fn.stdpath("data") .. "/learn-cli-progress.json"
 
 --- Lädt gespeicherten Fortschritt
 ---@return table
 function M.load()
-  if vim.fn.filereadable(storage_file) == 0 then
+  if not is_readable_file(storage_file) then
     return M.init_empty()
   end
 
-  local ok, content = pcall(vim.fn.readfile, storage_file)
-  if not ok then
-    return M.init_empty()
-  end
-
-  local data_ok, data = pcall(vim.json.decode, table.concat(content, "\n"))
-  if not data_ok then
+  local data = fs_json.read(storage_file)
+  if not data then
     return M.init_empty()
   end
 
@@ -28,13 +26,10 @@ end
 --- Speichert Fortschritt
 ---@param data table
 function M.save(data)
-  local ok, json = pcall(vim.json.encode, data)
+  local ok, err = fs_json.write(storage_file, data)
   if not ok then
-    vim.notify("Fehler beim Speichern des Fortschritts", vim.log.levels.ERROR)
-    return
+    vim.notify("Fehler beim Speichern des Fortschritts: " .. tostring(err), vim.log.levels.ERROR)
   end
-
-  vim.fn.writefile(vim.split(json, "\n"), storage_file)
 end
 
 --- Initialisiert leeren Fortschritt
