@@ -77,10 +77,10 @@ use {
 ## 🚀 Quick Start
 
 1. Install the plugin
-2. Run `:LearnCli` to open the dashboard
-3. Select a cycle or exercise to begin
-4. Practice in the integrated terminal
-5. Track your progress over time
+2. Create your first cycle: `:LearnCLICreateCycle cycle_01`
+3. Run `:LearnCLIDashboard` to open the dashboard
+4. Navigate exercises with `:LearnCLINext` / `:LearnCLIPrev`
+5. Track your progress over time (see the full [Usage Guide](docs/users/USAGE-GUIDE.md))
 
 ## ⚙️ Configuration
 
@@ -88,61 +88,20 @@ use {
 
 ```lua
 require('learn_cli').setup({
-  -- Data storage location
-  data_dir = vim.fn.stdpath("data") .. "/learn_cli",
+  -- Path to your exercises/cycles directory
+  exercises_path = vim.fn.stdpath('config') .. '/exercises',
 
-  -- Auto-save progress
-  auto_save = true,
-  auto_save_interval_ms = 30000, -- 30 seconds
+  -- Auto-open dashboard on startup
+  auto_open_dashboard = false,
 
-  -- UI settings
-  ui = {
-    dashboard = {
-      width = "85%",
-      height = "85%",
-      border = "rounded", -- "single", "double", "rounded", "none"
-      show_stats = true,
-      show_recent = true,
-      recent_count = 10,
-    },
-    exercise_view = {
-      width = "90%",
-      height = "90%",
-      border = "rounded",
-      show_timer = true,
-      show_hints_count = true,
-      terminal_height = 15,
-    },
-    show_progress_bar = true,
-    use_icons = true,
-  },
-
-  -- Scoring algorithm
-  scoring = {
-    base_score = 100,
-    hint_penalty = 10,
-    time_bonus_threshold = 0.8, -- Bonus if < 80% of target time
-    time_penalty_threshold = 1.5, -- Penalty if > 150% of target time
-    completion_bonus = 10,
-  },
-
-  -- Timer settings
-  timer = {
-    show_warnings = true,
-    warning_at_percent = 0.75, -- Warn at 75% of target time
-    adaptive_target = true, -- Adjust target based on performance
-    adaptive_factor = 0.9, -- 10% adjustment
-  },
+  -- Notification level
+  notify_level = vim.log.levels.INFO,
 
   -- Keymaps
   keymaps = {
-    prefix = "<leader>lc",
-    dashboard = "d",
-    next_exercise = "n",
-    prev_exercise = "p",
-    show_hint = "h",
-    complete_exercise = "<CR>",
-    quit = "q",
+    next_exercise = '<leader>ln',
+    prev_exercise = '<leader>lp',
+    toggle_dashboard = '<leader>ld',
   },
 })
 ```
@@ -153,118 +112,58 @@ require('learn_cli').setup({
 
 | Command | Description |
 |---------|-------------|
-| `:LearnCli` | Open the main dashboard |
-| `:LearnCliStart <id>` | Start a specific exercise by ID |
-| `:LearnCliStats` | Show detailed statistics |
-| `:LearnCliExport <file>` | Export progress to a file |
-| `:LearnCliImport <file>` | Import progress from a file |
-| `:LearnCliBackup` | Create a backup of current progress |
-| `:LearnCliReset!` | Reset all progress (with confirmation) |
+| `:LearnCLIDashboard` | Toggle the dashboard |
+| `:LearnCLINext` | Move to the next exercise |
+| `:LearnCLIPrev` | Move to the previous exercise |
+| `:LearnCLIInfo` | Show current cycle information |
+| `:LearnCLIReset` | Reset all progress (requires confirmation) |
+| `:LearnCLICreateCycle <name> [path]` | Generate a new cycle template with full directory structure |
+
+See the [Usage Guide](docs/users/USAGE-GUIDE.md) for the generated file structure and programmatic API (`get_progress()`, `open_dashboard()`, `create_cycle()`).
 
 ### Default Keymaps
 
-Global (configurable prefix: `<leader>lc`):
+- `<leader>ld` - Toggle dashboard
+- `<leader>ln` - Next exercise
+- `<leader>lp` - Previous exercise
 
-- `<leader>lcd` - Open dashboard
-- `<leader>lcs` - Show statistics
-- `<leader>lcb` - Backup progress
-
-In Exercise View:
-
-- `n` - Next exercise
-- `p` - Previous exercise
-- `h` - Show next hint
-- `<CR>` - Mark exercise complete
-- `q` - Quit exercise view
+All three are configurable via `keymaps` in `setup()`.
 
 ## 📚 Creating Custom Exercises
 
-Create a Lua file in your exercises directory:
+Exercises live as YAML files inside a cycle's day folder (`exercises_path/cycles/<cycle>/iteration_N/day_NN/exercises.yaml`):
 
-```lua
--- ~/.config/nvim/learn_cli_exercises/my_exercises.lua
-
-return {
-  {
-    id = "sed_basic_replace",
-    program = "sed",
-    title = "Basic Text Replacement",
-    description = "Learn to replace text using sed",
-    difficulty = "beginner",
-    target_time_seconds = 180,
-
-    task = [[
-You have a file 'data.txt' with various lines.
-
-Task:
-1. Replace all occurrences of "foo" with "bar"
-2. Save the result to 'output.txt'
-
-Expected command: sed 's/foo/bar/g' data.txt > output.txt
-    ]],
-
-    hints = {
-      "Use sed with the 's' command for substitution",
-      "The syntax is: s/pattern/replacement/flags",
-      "The 'g' flag means 'global' (all occurrences)",
-    },
-
-    files = {
-      ["data.txt"] = [[
-foo is here
-more foo there
-foo foo everywhere
-not here though
-      ]],
-    },
-
-    references = {
-      "man sed",
-      "https://www.gnu.org/software/sed/manual/sed.html",
-    },
-
-    tags = { "sed", "text", "replace" },
-    prerequisites = {},
-  },
-}
+```yaml
+# Day 1 Exercises
+exercises:
+  - id: 1
+    title: "Basic Pattern Search"
+    difficulty: easy
+    command: grep
+    description: "Search for a pattern in files"
+    hints:
+      - "Use grep with -r for recursive search"
+      - "Use -n to show line numbers"
+    solution: "grep -rn 'pattern' /path"
 ```
 
-Then configure the exercises directory:
-
-```lua
-require('learn_cli').setup({
-  exercises_dir = vim.fn.stdpath("config") .. "/learn_cli_exercises",
-})
-```
+Learning material for a day goes into `info_a.md` through `info_d.md` in the same folder, and command references into `references/commands/<command>.md`.
 
 ## 🔄 Creating Cycles
 
-Cycles group related exercises into learning paths:
+Use the built-in template generator to scaffold a new cycle's full directory structure (metadata, iterations, days, exercise YAML, info files, and command references):
+
+```vim
+:LearnCLICreateCycle my_cycle [path]
+```
+
+Or programmatically:
 
 ```lua
--- In your custom exercises file or separate cycle file
-
-local cycles = {
-  {
-    id = "grep_fundamentals",
-    name = "Grep Fundamentals",
-    description = "Master the grep command",
-    exercise_ids = {
-      "grep_basic_search",
-      "grep_case_insensitive",
-      "grep_regex_basics",
-      "grep_inverted_match",
-    },
-    estimated_duration_minutes = 20,
-    difficulty = "beginner",
-  },
-}
-
--- Register cycles
-for _, cycle in ipairs(cycles) do
-  require('learn_cli.state').register_cycle(cycle)
-end
+local ok, err = require('learn_cli').create_cycle('my_cycle')
 ```
+
+Then edit the generated `metadata.yaml` (name, description, iterations, days, topics) and `exercises.yaml` files to customize the cycle. See the [Usage Guide](docs/users/USAGE-GUIDE.md) for the full generated file layout.
 
 ## 📊 Scoring System
 
